@@ -268,37 +268,197 @@ schedule_interval = "@hourly"
 
 ## Machine Learning
 
-### Feature Engineering
+### How Spark MLlib Detects Fake News
 
-The system extracts 15+ features from each article:
+The fake news detection process in our system works through a combination of feature engineering, pattern recognition, and machine learning algorithms. Here's a detailed explanation:
+
+#### 1. **Feature Extraction Process**
+
+The system analyzes multiple characteristics of news articles that research has shown to correlate with fake news:
 
 ```python
 features = {
     # Content features
+    'word_count': len(text.split()),           # Fake news often shorter
+    'char_count': len(text),                   # Character count
+    'avg_word_length': char_count / word_count, # Complexity indicator
+    
+    # Style features (fake news tends to be sensational)
+    'exclamation_count': text.count('!'),      # Emotional emphasis
+    'question_count': text.count('?'),         # Clickbait questions
+    'caps_ratio': sum(1 for c in text if c.isupper()) / len(text),  # SHOUTING
+    
+    # Credibility features
+    'has_author': 1 if author else 0,         # Missing authors suspicious
+    'url_count': len(re.findall(r'http[s]?://', text)),  # Source citations
+    'numeric_count': count_numbers(text),      # Statistics usage
+    
+    # Text features (TF-IDF)
+    'tfidf_vector': vectorizer.transform([text])  # Word patterns
+}
+```
+
+#### 2. **Why These Features Work**
+
+Research has identified common patterns in fake news:
+
+- **Sensationalism**: Excessive use of exclamation marks (!!! BREAKING!!!)
+- **Emotional Language**: High caps ratio, emotional word choices
+- **Lack of Sources**: Few or no URLs, missing author attribution
+- **Clickbait Style**: Questions in titles, short content
+- **Specific Vocabulary**: Certain words appear more frequently in fake news
+
+#### 3. **The ML Pipeline**
+
+Our system uses three complementary algorithms:
+
+**Random Forest Classifier:**
+```python
+# Creates 100 decision trees that vote on the outcome
+RandomForestClassifier(numTrees=100, maxDepth=10)
+
+# Example decision path:
+# IF exclamation_count > 3 AND caps_ratio > 0.2 → 80% fake
+# IF has_author = 0 AND url_count < 2 → 75% fake
+```
+
+**Logistic Regression:**
+```python
+# Learns optimal weights for each feature
+LogisticRegression(maxIter=100)
+
+# Example learned weights:
+# score = 0.8 * exclamation_count + 0.6 * caps_ratio - 0.5 * has_author ...
+# IF score > threshold → classify as fake
+```
+
+**Gradient Boosting Trees:**
+```python
+# Builds trees sequentially, each correcting previous errors
+GBTClassifier(maxIter=50)
+
+# Captures complex patterns like:
+# "High caps + many questions + no author = very likely fake"
+```
+
+#### 4. **Real Example Walkthrough**
+
+Let's trace how the system analyzes a suspicious article:
+
+```python
+# Input article
+title = "SHOCKING!!! You Won't BELIEVE What Scientists Discovered!!!"
+content = "Scientists HATE this one simple trick..."
+
+# Step 1: Feature extraction
+features = {
+    'exclamation_count': 6,      # Very high
+    'caps_ratio': 0.35,          # 35% capitals (extremely high)
+    'question_count': 0,
+    'word_count': 8,             # Very short
+    'has_author': 0,             # No author
+    'url_count': 0,              # No sources
+    'avg_word_length': 5.2
+}
+
+# Step 2: Each model makes prediction
+random_forest_prediction = {
+    'prediction': 'fake',
+    'confidence': 0.95,  # 95% sure it's fake
+    'reason': 'Multiple red flags: excessive punctuation, caps, no sources'
+}
+
+logistic_regression_prediction = {
+    'prediction': 'fake',
+    'confidence': 0.92,
+    'reason': 'High weights on exclamation and caps features'
+}
+
+gbt_prediction = {
+    'prediction': 'fake', 
+    'confidence': 0.97,
+    'reason': 'Pattern matches known clickbait structure'
+}
+
+# Step 3: Ensemble decision (majority voting)
+final_prediction = 'FAKE' with 94.7% average confidence
+```
+
+#### 5. **TF-IDF Text Analysis**
+
+Beyond simple features, the system analyzes word patterns:
+
+```python
+# TF-IDF identifies important words
+# Words common in fake news get high scores:
+fake_news_indicators = [
+    'shocking', 'unbelievable', 'hate', 'simple trick',
+    'won\'t believe', 'doctors hate', 'banned'
+]
+
+# Words common in real news:
+real_news_indicators = [
+    'according to', 'research shows', 'published in',
+    'university', 'peer-reviewed', 'methodology'
+]
+```
+
+#### 6. **Continuous Learning**
+
+The model improves over time by:
+- Retraining on newly labeled data
+- Adjusting feature weights based on performance
+- Adding new features as fake news tactics evolve
+
+### Feature Engineering
+
+The complete feature set extracted from each article:
+
+```python
+# All 15+ features used by the models
+features = {
+    # Content metrics
     'word_count': len(text.split()),
     'char_count': len(text),
     'avg_word_length': char_count / word_count,
+    'title_length': len(title),
     
-    # Style features
+    # Style indicators
     'exclamation_count': text.count('!'),
     'question_count': text.count('?'),
     'caps_ratio': sum(1 for c in text if c.isupper()) / len(text),
     
-    # Metadata features
+    # Credibility markers
     'has_author': 1 if author else 0,
     'url_count': len(re.findall(r'http[s]?://', text)),
+    'numeric_count': len(re.findall(r'\d+', text)),
     
     # Text features (TF-IDF)
-    'tfidf_vector': vectorizer.transform([text])
+    'tfidf_vector': vectorizer.transform([text])  # 1000-dimensional vector
 }
 ```
 
 ### Model Training
 
 ```python
-# Example training code
+# Example training code showing the complete pipeline
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import VectorAssembler, StandardScaler
 from pyspark.ml.classification import RandomForestClassifier
 
+# Assemble features
+assembler = VectorAssembler(
+    inputCols=feature_columns,
+    outputCol="raw_features"
+)
+
+# Scale features for better performance
+scaler = StandardScaler(
+    inputCol="raw_features",
+    outputCol="features"
+)
+
+# Create classifier
 rf = RandomForestClassifier(
     numTrees=100,
     maxDepth=10,
@@ -306,9 +466,12 @@ rf = RandomForestClassifier(
     featuresCol="features"
 )
 
-model = rf.fit(training_data)
-```
+# Build pipeline
+pipeline = Pipeline(stages=[assembler, scaler, rf])
 
+# Train model on distributed data
+model = pipeline.fit(training_data)
+```
 ### Model Evaluation
 
 ```
